@@ -2164,3 +2164,1388 @@ SOFTWARE ARCHITECTURE
 
 
 **The next useful step is to turn this into a systematic course:** for each item, explain **why it exists → problem → bad design → principle → pattern → architecture → real-world scenario → C# implementation → when NOT to use it → trade-offs → interview/design-review questions**. That would give something substantially more useful than a list of definitions.
+
+---
+
+# 52. Architecture Starts With Business Capabilities
+
+Don't begin by drawing servers.
+
+Start by asking:
+
+> **What does the business actually do?**
+
+For an e-commerce system:
+
+```text
+Business
+│
+├── Customer Management
+├── Product Management
+├── Pricing
+├── Ordering
+├── Payment
+├── Inventory
+├── Shipping
+├── Notification
+└── Reporting
+```
+
+These become candidates for **bounded contexts / modules**.
+
+Then identify relationships:
+
+```text
+Customer
+   │
+   ▼
+Order ───────► Payment
+ │
+ ▼
+Inventory
+ │
+ ▼
+Shipping
+ │
+ ▼
+Notification
+```
+
+Only after understanding this should you decide whether these are:
+
+* classes,
+* modules,
+* processes,
+* services,
+* microservices,
+* or external systems.
+
+---
+
+# 53. Context Mapping
+
+Two domains may interact without sharing the same model.
+
+Example:
+
+```text
+Sales
+  │
+  │ Customer
+  ▼
+CRM
+```
+
+The CRM's definition of a customer might be:
+
+```text
+Customer
+ ├── contact information
+ ├── lead status
+ └── marketing preferences
+```
+
+while Accounting needs:
+
+```text
+Customer
+ ├── tax identity
+ ├── billing address
+ ├── credit limit
+ └── payment history
+```
+
+Don't force one giant shared model.
+
+Instead:
+
+```text
+Sales Customer
+       │
+       ▼
+Anti-Corruption Layer
+       │
+       ▼
+Accounting Customer
+```
+
+This is particularly useful when integrating **legacy systems**.
+
+---
+
+# 54. Domain Model vs Data Model
+
+A common architectural mistake is assuming:
+
+```text
+Database table = Domain entity
+```
+
+They aren't necessarily the same.
+
+Database:
+
+```text
+orders
+----------------
+id
+customer_id
+status
+total
+created_at
+```
+
+Domain:
+
+```csharp id="3xq8r0"
+public class Order
+{
+    public OrderId Id { get; }
+    public CustomerId CustomerId { get; }
+
+    private OrderStatus status;
+    private Money total;
+
+    public void Confirm()
+    {
+        // business rules
+    }
+
+    public void Cancel()
+    {
+        // business rules
+    }
+}
+```
+
+The domain model represents **business behavior and invariants**.
+
+The database represents **persistence**.
+
+---
+
+# 55. Invariants
+
+This is one of the most important concepts in domain architecture.
+
+An invariant is something that must **always be true**.
+
+Example:
+
+```text
+Order
+```
+
+may have:
+
+```text
+Total >= 0
+```
+
+and:
+
+```text
+Cancelled order cannot be shipped
+```
+
+and:
+
+```text
+Paid order cannot be paid twice
+```
+
+Put these rules where they can be protected.
+
+Bad:
+
+```csharp id="u7o8xg"
+controller.CancelOrder(...)
+```
+
+with business rules scattered across controllers.
+
+Better:
+
+```csharp id="x3g2kz"
+order.Cancel();
+```
+
+The domain protects itself.
+
+---
+
+# 56. Aggregate Design
+
+An aggregate defines a consistency boundary.
+
+Example:
+
+```text id="t6p6qg"
+Order
+│
+├── OrderId
+├── CustomerId
+├── Status
+│
+└── OrderItems
+     ├── Product
+     ├── Quantity
+     └── Price
+```
+
+`Order` is the aggregate root.
+
+Outside code shouldn't arbitrarily modify:
+
+```text
+OrderItem
+```
+
+Instead:
+
+```csharp id="f8g2s1"
+order.AddItem(product, quantity);
+order.RemoveItem(itemId);
+order.ChangeQuantity(itemId, quantity);
+```
+
+The aggregate protects its invariants.
+
+---
+
+# 57. Transaction Boundaries
+
+A transaction should generally align with a meaningful consistency boundary.
+
+Example:
+
+```text id="9l7zsp"
+Create Order
+   │
+   ├── Order
+   ├── Order Items
+   └── Order Total
+```
+
+can be one transaction.
+
+But:
+
+```text id="2c0nkk"
+Create Order
+   +
+Send Email
+   +
+Charge Payment
+   +
+Update Analytics
+```
+
+shouldn't necessarily be one database transaction.
+
+Instead:
+
+```text id="wq4vqh"
+Transaction
+    ↓
+Order Created
+    ↓
+Event
+    ├── Payment
+    ├── Email
+    └── Analytics
+```
+
+---
+
+# 58. CQRS
+
+Command Query Responsibility Segregation separates writes and reads.
+
+```text id="xwq2z7"
+             Application
+                 │
+          ┌──────┴──────┐
+          ▼             ▼
+       Command         Query
+          │             │
+          ▼             ▼
+       Domain        Read Model
+          │             │
+          ▼             ▼
+      Write DB       Read DB
+```
+
+Command:
+
+```text
+CreateOrder
+CancelOrder
+ConfirmPayment
+```
+
+Query:
+
+```text
+GetOrder
+SearchOrders
+GetCustomerDashboard
+```
+
+They don't necessarily need identical models.
+
+---
+
+# 59. When CQRS Is Actually Useful
+
+Don't use CQRS simply because it's fashionable.
+
+It becomes useful when:
+
+```text
+Reads >> Writes
+```
+
+or:
+
+```text
+Read model is radically different from write model
+```
+
+or:
+
+```text
+Complex domain commands
++
+Complex reporting/search requirements
+```
+
+A normal CRUD application may be better with:
+
+```text
+Controller
+ ↓
+Service
+ ↓
+Repository
+ ↓
+Database
+```
+
+---
+
+# 60. Event Sourcing
+
+Instead of storing only current state:
+
+```text
+Account
+Balance = 5000
+```
+
+store the events:
+
+```text
+AccountCreated
+MoneyDeposited 10000
+MoneyWithdrawn 3000
+MoneyWithdrawn 2000
+```
+
+Then:
+
+```text
+Events
+  ↓
+Replay
+  ↓
+Current State
+```
+
+Architecture:
+
+```text id="spq9q2"
+Command
+  ↓
+Domain
+  ↓
+Event Store
+  ↓
+Events
+  ├── Read Model
+  ├── Analytics
+  └── Integration
+```
+
+It provides powerful historical reconstruction but adds considerable complexity.
+
+---
+
+# 61. Transactional Outbox
+
+A classic distributed-system problem:
+
+```text id="rj9lq1"
+Save Order
+    ↓
+Publish Event
+```
+
+What if:
+
+```text
+Database succeeds
+Event publishing fails
+```
+
+Now your system says:
+
+```text
+Order exists
+BUT
+OrderCreated event doesn't
+```
+
+Outbox solves this:
+
+```text id="6f2v3c"
+Database Transaction
+ ├── Order
+ └── OutboxEvent
+        ↓
+     Commit
+        ↓
+ Outbox Processor
+        ↓
+ Message Broker
+```
+
+Database state and the intention to publish are committed together.
+
+---
+
+# 62. Saga Pattern
+
+Suppose:
+
+```text id="xq3w3j"
+Order
+ ↓
+Payment
+ ↓
+Inventory
+ ↓
+Shipping
+```
+
+There isn't one global database transaction.
+
+A failure might require compensation:
+
+```text id="8h7w7g"
+Order Created
+     ↓
+Payment Completed
+     ↓
+Inventory Reserved
+     ↓
+Shipping Failed
+     ↓
+Release Inventory
+     ↓
+Refund Payment
+     ↓
+Cancel Order
+```
+
+This is a **Saga**.
+
+Two common approaches:
+
+```text
+Choreography
+```
+
+where services react to events.
+
+Or:
+
+```text
+Orchestration
+```
+
+where a coordinator controls the workflow.
+
+---
+
+# 63. Idempotency
+
+Suppose a client sends:
+
+```text
+POST /payments
+```
+
+and the network times out.
+
+The client retries.
+
+You don't want:
+
+```text
+$100
++
+$100
+=
+$200 charged
+```
+
+Use an idempotency key:
+
+```text
+Idempotency-Key: abc-123
+```
+
+Server:
+
+```text
+abc-123 → already processed
+```
+
+returns the original result.
+
+This principle is crucial for:
+
+* payments
+* order creation
+* message processing
+* external API calls
+* distributed workflows
+
+---
+
+# 64. At-Least-Once Delivery
+
+Most message systems cannot magically guarantee:
+
+> "This message will be processed exactly once."
+
+Instead, you frequently design around:
+
+```text
+At least once
+```
+
+meaning:
+
+```text
+Message
+ ↓
+Consumer
+ ↓
+Processing
+ ↓
+Possible duplicate
+```
+
+Therefore consumers should be idempotent.
+
+```text id="j7h0d2"
+EventId = 12345
+
+ProcessedEvents
+----------------
+12345
+```
+
+If `12345` arrives again:
+
+```text
+Ignore / safely return
+```
+
+---
+
+# 65. Bulkhead Pattern
+
+If one dependency consumes all resources:
+
+```text id="w4j0k2"
+Payment requests
+████████████████████
+```
+
+it can starve other operations.
+
+Instead:
+
+```text
+Application
+├── Payment pool
+├── Order pool
+└── Reporting pool
+```
+
+Failure in one area doesn't necessarily consume everything.
+
+The analogy is a ship's watertight compartments.
+
+---
+
+# 66. Rate Limiting
+
+Protect services from excessive traffic.
+
+```text id="8w4g8b"
+Client
+ ↓
+Rate Limiter
+ ↓
+API
+```
+
+Example:
+
+```text
+100 requests / minute / user
+```
+
+For authentication endpoints, you might have a much stricter policy.
+
+Rate limiting is both a **security** and **reliability** concern.
+
+---
+
+# 67. Backpressure
+
+Suppose:
+
+```text id="c3jv5x"
+Producer
+████████████████████
+       ↓
+     Queue
+       ↓
+Consumer
+██
+```
+
+Producer is much faster than consumer.
+
+Queue grows indefinitely.
+
+A robust architecture needs:
+
+```text
+Backpressure
+Queue limits
+Load shedding
+Scaling
+Dead-letter queues
+```
+
+Otherwise eventually:
+
+```text
+Memory
+ ↓
+Disk
+ ↓
+System failure
+```
+
+---
+
+# 68. Dead-Letter Queues
+
+Messages that repeatedly fail shouldn't remain in the normal queue forever.
+
+```text id="x5b3v7"
+Queue
+ ↓
+Consumer
+ ↓
+Failure
+ ↓
+Retry
+ ↓
+Retry
+ ↓
+Retry
+ ↓
+Dead Letter Queue
+```
+
+Then operators can investigate.
+
+---
+
+# 69. Workflow / State Machine Architecture
+
+Some domains are naturally state-driven.
+
+Example:
+
+```text id="qj8c3p"
+Order
+
+PENDING
+   ↓
+CONFIRMED
+   ↓
+PAID
+   ↓
+PROCESSING
+   ↓
+SHIPPED
+   ↓
+DELIVERED
+```
+
+Invalid transitions should be rejected:
+
+```text
+DELIVERED → PENDING ❌
+CANCELLED → SHIPPED ❌
+```
+
+Implement explicitly rather than scattering status checks throughout the system.
+
+---
+
+# 70. Policy-Based Architecture
+
+Sometimes behavior depends on configurable rules.
+
+Instead of:
+
+```csharp id="j9jv5s"
+if (user.Role == "Admin")
+{
+    ...
+}
+```
+
+everywhere, use policies:
+
+```text id="g2r8c1"
+Authorization Policy
+      ↓
+CanApproveElection
+      ↓
+Role + Permission + Context
+```
+
+This scales better when rules become complex.
+
+---
+
+# 71. RBAC vs ABAC
+
+### RBAC
+
+```text
+User
+ ↓
+Role
+ ↓
+Permission
+```
+
+Example:
+
+```text
+Admin
+ ├── Create
+ ├── Update
+ ├── Delete
+ └── Approve
+```
+
+### ABAC
+
+Authorization considers attributes:
+
+```text
+User
+ +
+Resource
+ +
+Action
+ +
+Context
+```
+
+Example:
+
+```text
+User.department == Resource.department
+AND
+User.role == "Manager"
+AND
+Action == "Approve"
+```
+
+For enterprise systems, ABAC/policy-based authorization can complement RBAC when simple roles become insufficient.
+
+---
+
+# 72. Feature Flags
+
+Deployment and feature release don't have to be the same thing.
+
+```text
+Deploy code
+     ↓
+Feature disabled
+     ↓
+Enable for internal users
+     ↓
+10%
+     ↓
+50%
+     ↓
+100%
+```
+
+Useful for:
+
+* gradual rollout
+* experimentation
+* emergency disablement
+* tenant-specific features
+
+But don't allow feature flags to become permanent hidden architecture.
+
+---
+
+# 73. Canary Deployment
+
+Instead of:
+
+```text
+v1 ──────────────→ 100%
+```
+
+use:
+
+```text
+v1 → 95%
+v2 → 5%
+```
+
+Monitor:
+
+```text
+Error rate
+Latency
+CPU
+Business metrics
+```
+
+Then increase gradually.
+
+---
+
+# 74. Blue-Green Deployment
+
+```text
+              Load Balancer
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+       Blue v1             Green v2
+          │                   │
+       Current             New
+```
+
+Switch traffic when Green is validated.
+
+Rollback can be fast.
+
+---
+
+# 75. Contract Testing
+
+If Service A depends on Service B:
+
+```text
+A ───────► B
+```
+
+unit tests aren't enough.
+
+Test the contract:
+
+```text
+A expects:
+
+GET /customers/123
+
+{
+   "id": "123",
+   "name": "..."
+}
+```
+
+If B changes the contract unexpectedly, CI should detect it.
+
+---
+
+# 76. Consumer-Driven Contracts
+
+The consumer defines what it actually needs.
+
+```text id="5m7q5j"
+Consumer
+   ↓
+Contract
+   ↓
+Provider
+```
+
+This is especially useful in microservice environments.
+
+---
+
+# 77. API Gateway vs BFF
+
+### API Gateway
+
+Common infrastructure entry point:
+
+```text
+Clients
+   ↓
+API Gateway
+   ↓
+Services
+```
+
+Handles concerns such as:
+
+* authentication
+* routing
+* rate limiting
+* TLS
+* observability
+
+### Backend-for-Frontend
+
+Different clients may need different APIs:
+
+```text
+Web ──► Web BFF
+Mobile ► Mobile BFF
+Admin ► Admin BFF
+```
+
+This prevents one giant API from trying to perfectly serve every UI.
+
+---
+
+# 78. Service Discovery
+
+With dynamic services:
+
+```text
+Order Service
+      ↓
+Service Discovery
+      ↓
+Payment Service instance
+```
+
+The caller doesn't need to hard-code:
+
+```text
+10.0.3.17:8080
+```
+
+Modern orchestration platforms often provide this capability.
+
+---
+
+# 79. Platform Architecture
+
+At larger scale, individual applications aren't enough.
+
+You may need an internal platform:
+
+```text id="d6g0jw"
+                Engineering Teams
+                 /      |      \
+                /       |       \
+          Application Application Application
+                \       |       /
+                 \      |      /
+                Internal Platform
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+      CI/CD          Logging       Identity
+        ▼              ▼              ▼
+   Infrastructure   Observability   Security
+```
+
+This is where **platform engineering** becomes relevant.
+
+---
+
+# 80. Reference Architecture
+
+Organizations shouldn't reinvent architecture every project.
+
+Create reference architectures:
+
+```text id="j9r6ub"
+Enterprise Reference Architecture
+
+Web
+ ↓
+API Gateway
+ ↓
+Application
+ ↓
+Domain
+ ↓
+PostgreSQL
+ ↓
+Messaging
+ ↓
+Observability
+```
+
+Teams can start from the template and adapt it.
+
+---
+
+# 81. Architecture Templates
+
+For example:
+
+### CRUD Application
+
+```text
+Angular
+ ↓
+.NET API
+ ↓
+EF Core
+ ↓
+PostgreSQL
+```
+
+### Enterprise Modular Application
+
+```text
+Angular
+ ↓
+.NET
+ ↓
+Application
+ ↓
+Domain
+ ↓
+Infrastructure
+ ↓
+PostgreSQL
+```
+
+### Distributed Application
+
+```text
+Angular
+ ↓
+Gateway
+ ↓
+Services
+ ↓
+Message Broker
+ ↓
+Service-owned databases
+```
+
+Architecture becomes **repeatable engineering**, not personal preference.
+
+---
+
+# 82. Architecture Standards vs Principles vs Patterns vs Practices
+
+This distinction is worth memorizing:
+
+```text
+STANDARD
+"What external/organizational rules should we follow?"
+
+        ↓
+
+PRINCIPLE
+"What fundamental rule guides our design?"
+
+        ↓
+
+STYLE
+"What broad architectural structure are we using?"
+
+        ↓
+
+PATTERN
+"What proven solution solves this recurring problem?"
+
+        ↓
+
+PRACTICE
+"How do we consistently implement and operate it?"
+
+        ↓
+
+TECHNOLOGY
+"What concrete tools implement it?"
+```
+
+Example:
+
+```text
+Standard:
+OpenAPI
+
+Principle:
+Explicit contracts
+
+Style:
+Microservices
+
+Pattern:
+API Gateway
+
+Practice:
+Contract testing
+
+Technology:
+.NET + OpenAPI + Kubernetes
+```
+
+---
+
+# 83. Architecture Is a Constraint-Satisfaction Problem
+
+A useful mental model:
+
+```text
+                    Requirements
+                         │
+                         ▼
+                    Constraints
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+         Security     Performance    Cost
+            │            │            │
+            └────────────┼────────────┘
+                         ▼
+                Architecture Options
+                         │
+                         ▼
+                    Trade-offs
+                         │
+                         ▼
+                 Architecture Decision
+```
+
+You aren't searching for:
+
+> "the perfect architecture."
+
+You're finding an architecture that satisfies the important constraints with acceptable trade-offs.
+
+---
+
+# 84. Architecture Review Checklist
+
+For a real project, ask:
+
+### Business
+
+```text
+□ What business capabilities exist?
+□ What changes frequently?
+□ What changes rarely?
+□ What is mission critical?
+```
+
+### Domain
+
+```text
+□ What are the bounded contexts?
+□ What are the aggregates?
+□ What are the invariants?
+□ Who owns each piece of data?
+```
+
+### Architecture
+
+```text
+□ Why this architecture style?
+□ What alternatives were considered?
+□ What are the major trade-offs?
+□ Where are the boundaries?
+```
+
+### Security
+
+```text
+□ Authentication?
+□ Authorization?
+□ Threat model?
+□ Secrets?
+□ Encryption?
+□ Audit?
+```
+
+### Reliability
+
+```text
+□ Failure scenarios?
+□ Timeout?
+□ Retry?
+□ Idempotency?
+□ Disaster recovery?
+□ RPO/RTO?
+```
+
+### Performance
+
+```text
+□ Expected traffic?
+□ Peak traffic?
+□ Latency requirements?
+□ Database bottlenecks?
+□ Caching?
+```
+
+### Operations
+
+```text
+□ Logging?
+□ Metrics?
+□ Tracing?
+□ Alerting?
+□ Deployment?
+□ Rollback?
+```
+
+### Evolution
+
+```text
+□ API compatibility?
+□ Migration strategy?
+□ Versioning?
+□ Technical debt?
+□ Architecture fitness tests?
+```
+
+---
+
+# 85. One More Important Concept: Architecture vs Design
+
+This distinction is often blurred.
+
+### Architecture
+
+Deals primarily with **system-level structure and significant decisions**:
+
+```text
+Services
+Boundaries
+Databases
+Communication
+Security
+Deployment
+Scalability
+Reliability
+```
+
+### Design
+
+Deals more with **internal construction**:
+
+```text
+Classes
+Interfaces
+Methods
+Algorithms
+Patterns
+Data structures
+```
+
+Example:
+
+```text
+ARCHITECTURE
+──────────────────────
+Order Service
+Payment Service
+Inventory Service
+PostgreSQL
+Message Broker
+
+
+DESIGN
+──────────────────────
+Order
+OrderItem
+OrderRepository
+CreateOrderHandler
+PricingStrategy
+PaymentAdapter
+```
+
+They overlap, but they're not identical.
+
+---
+
+# 86. And the Most Important Principle
+
+All of this ultimately comes back to:
+
+```text
+              BUSINESS NEED
+                    ↓
+              REQUIREMENTS
+                    ↓
+          QUALITY ATTRIBUTES
+                    ↓
+             CONSTRAINTS
+                    ↓
+           DOMAIN BOUNDARIES
+                    ↓
+        ARCHITECTURE DECISIONS
+                    ↓
+          DESIGN PRINCIPLES
+                    ↓
+             PATTERNS
+                    ↓
+           IMPLEMENTATION
+                    ↓
+              AUTOMATION
+                    ↓
+              OBSERVABILITY
+                    ↓
+             REAL SYSTEM
+                    ↓
+             FEEDBACK
+                    │
+                    └──────────► EVOLUTION
+```
+
+That last arrow is crucial.
+
+**Architecture isn't "draw boxes → code → finish."**
+
+It is a continuous feedback loop:
+
+> **Understand → Decide → Build → Measure → Learn → Refactor → Evolve.**
+
+**GoF pattern learning**, this gives us the right place to go next: we can continue into **Structural GoF patterns**, but now each one can be against this architecture model—**the problem → forces/trade-off → naïve implementation → pattern → internal mechanics → production example → C# implementation → when it becomes overengineering → how it interacts with SOLID/DDD/Clean Architecture**.
+
